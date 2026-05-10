@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocFuse — PDF Combiner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
+
+  :root {
+    --ink: #0e0e0e;
+    --paper: #f5f2ec;
+    --cream: #ede9e0;
+    --accent: #c8402a;
+    --accent2: #2a6bc8;
+    --mid: #7a7570;
+    --border: #d0cbc3;
+    --scan: #3a3530;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grain overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.5;
+  }
+
+  header {
+    padding: 2.5rem 3rem 1.5rem;
+    display: flex;
+    align-items: baseline;
+    gap: 1.2rem;
+    border-bottom: 1.5px solid var(--border);
+  }
+
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 2rem;
+    letter-spacing: -0.04em;
+    color: var(--ink);
+  }
+  .logo span { color: var(--accent); }
+
+  .tagline {
+    font-size: 0.7rem;
+    color: var(--mid);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding-bottom: 3px;
+  }
+
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 3rem 2rem 6rem;
+  }
+
+  /* ── Drop Zone ── */
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 4px;
+    padding: 3.5rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    background: transparent;
+    position: relative;
+    overflow: hidden;
+  }
+  .drop-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(200,64,42,0.04);
+  }
+  .drop-zone input[type=file] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+  }
+
+  .drop-icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 1.2rem;
+    border: 2px solid var(--border);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.2s;
+  }
+  .drop-zone:hover .drop-icon { border-color: var(--accent); }
+
+  .drop-title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 1.15rem;
+    color: var(--ink);
+    margin-bottom: 0.4rem;
+  }
+  .drop-sub {
+    font-size: 0.72rem;
+    color: var(--mid);
+    letter-spacing: 0.05em;
+  }
+
+  /* ── Controls bar ── */
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin: 2rem 0 1.2rem;
+    padding: 1.1rem 1.4rem;
+    background: var(--cream);
+    border: 1.5px solid var(--border);
+    border-radius: 4px;
+  }
+
+  .toggles-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .toggle-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .toggle-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink);
+    font-weight: 500;
+    user-select: none;
+    min-width: 130px;
+  }
+
+  .toggle {
+    appearance: none;
+    width: 44px;
+    height: 24px;
+    background: var(--border);
+    border-radius: 12px;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.25s;
+    flex-shrink: 0;
+  }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: white;
+    top: 3px; left: 3px;
+    transition: left 0.25s, background 0.25s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .toggle:checked { background: var(--scan); }
+  .toggle:checked::after { left: 23px; }
+
+  .toggle.enhanced-toggle:checked { background: #1a1a1a; }
+
+  .badge-mode {
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    color: white;
+    opacity: 0;
+    transition: opacity 0.3s;
+    white-space: nowrap;
+  }
+  .badge-mode.gray  { background: var(--scan); }
+  .badge-mode.pure  { background: #1a1a1a; }
+  .badge-mode.visible { opacity: 1; }
+
+  .divider-v {
+    width: 1px;
+    height: 48px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  .btn-download {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 3px;
+    padding: 0.65rem 1.4rem;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+  }
+  .btn-download:hover { background: #a83420; }
+  .btn-download:active { transform: scale(0.97); }
+  .btn-download:disabled { background: var(--border); color: var(--mid); cursor: not-allowed; transform: none; }
+
+  /* ── File Queue ── */
+  .queue-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+  }
+  .queue-title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 0.8rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--mid);
+  }
+  .btn-clear {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--mid);
+    padding: 4px 10px;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .btn-clear:hover { border-color: var(--accent); color: var(--accent); }
+
+  .file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.7rem 1rem;
+    background: var(--cream);
+    border: 1.5px solid var(--border);
+    border-radius: 3px;
+    transition: border-color 0.2s;
+    animation: slideIn 0.22s ease;
+    cursor: grab;
+  }
+  .file-item:active { cursor: grabbing; }
+  .file-item.drag-over { border-color: var(--accent2); background: rgba(42,107,200,0.04); }
+  .file-item.dragging { opacity: 0.45; }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .file-num {
+    font-size: 0.65rem;
+    color: var(--mid);
+    min-width: 22px;
+    text-align: right;
+    user-select: none;
+  }
+
+  .file-thumb {
+    width: 36px;
+    height: 44px;
+    object-fit: cover;
+    border-radius: 2px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+    background: white;
+  }
+  .file-thumb.pdf-thumb {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.55rem;
+    letter-spacing: 0.05em;
+    font-weight: 500;
+    color: var(--accent);
+    background: white;
+  }
+
+  .file-info { flex: 1; min-width: 0; }
+  .file-name {
+    font-size: 0.78rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ink);
+  }
+  .file-meta {
+    font-size: 0.62rem;
+    color: var(--mid);
+    margin-top: 2px;
+    letter-spacing: 0.03em;
+  }
+
+  .drag-handle {
+    color: var(--border);
+    cursor: grab;
+    flex-shrink: 0;
+    font-size: 1rem;
+    line-height: 1;
+  }
+
+  .btn-remove {
+    background: none;
+    border: none;
+    color: var(--border);
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 2px;
+    transition: color 0.15s;
+    flex-shrink: 0;
+  }
+  .btn-remove:hover { color: var(--accent); }
+
+  /* ── Progress ── */
+  .progress-wrap {
+    margin-top: 1.5rem;
+    display: none;
+  }
+  .progress-wrap.visible { display: block; }
+  .progress-bar-bg {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  .progress-text {
+    font-size: 0.68rem;
+    color: var(--mid);
+    letter-spacing: 0.05em;
+  }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 3rem 0;
+    color: var(--mid);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: none;
+  }
+  .empty-state.visible { display: block; }
+
+  .count-badge {
+    display: inline-block;
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 0.62rem;
+    padding: 1px 7px;
+    border-radius: 10px;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+  }
+
+  footer {
+    position: fixed;
+    bottom: 0;
+    left: 0; right: 0;
+    padding: 0.8rem 3rem;
+    border-top: 1.5px solid var(--border);
+    background: var(--paper);
+    font-size: 0.62rem;
+    color: var(--border);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Doc<span>Fuse</span></div>
+  <div class="tagline">PDF &amp; Image Combiner</div>
+</header>
+
+<main>
+
+  <!-- Drop Zone -->
+  <div class="drop-zone" id="dropZone">
+    <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png">
+    <div class="drop-icon">
+      <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+      </svg>
+    </div>
+    <div class="drop-title">Drop files here or click to browse</div>
+    <div class="drop-sub">Accepts PDF · JPG · JPEG · PNG — drag to reorder after upload</div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="toggles-col">
+      <div class="toggle-wrap">
+        <label class="toggle-label" for="bwToggle">Grayscale Scan</label>
+        <input type="checkbox" class="toggle" id="bwToggle">
+        <span class="badge-mode gray" id="bwBadge">Soft Gray · Print</span>
+      </div>
+      <div class="toggle-wrap">
+        <label class="toggle-label" for="enhToggle">Enhanced B&amp;W</label>
+        <input type="checkbox" class="toggle enhanced-toggle" id="enhToggle">
+        <span class="badge-mode pure" id="enhBadge">Magic Color · CamScan</span>
+      </div>
+    </div>
+    <div class="divider-v"></div>
+    <button class="btn-download" id="downloadBtn" disabled>
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+      </svg>
+      Combine &amp; Download
+    </button>
+  </div>
+
+  <!-- Queue -->
+  <div id="queueSection" style="display:none">
+    <div class="queue-header">
+      <div class="queue-title">
+        File Queue <span class="count-badge" id="countBadge">0</span>
+      </div>
+      <button class="btn-clear" id="clearBtn">Clear All</button>
+    </div>
+    <div class="file-list" id="fileList"></div>
+  </div>
+
+  <div class="empty-state" id="emptyState">No files added yet</div>
+
+  <!-- Progress -->
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-text" id="progressText">Processing…</div>
+  </div>
+
+</main>
+
+<footer>
+  <span>DocFuse — Local Processing · No Upload · No Server</span>
+  <span>Drag rows to reorder</span>
+</footer>
+
+<script>
+  // ── PDF.js worker ──
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const fileInput   = document.getElementById('fileInput');
+  const dropZone    = document.getElementById('dropZone');
+  const fileList    = document.getElementById('fileList');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const bwToggle    = document.getElementById('bwToggle');
+  const enhToggle   = document.getElementById('enhToggle');
+  const bwBadge     = document.getElementById('bwBadge');
+  const enhBadge    = document.getElementById('enhBadge');
+  const countBadge  = document.getElementById('countBadge');
+  const clearBtn    = document.getElementById('clearBtn');
+  const queueSection = document.getElementById('queueSection');
+  const progressWrap = document.getElementById('progressWrap');
+  const progressFill = document.getElementById('progressFill');
+  const progressText = document.getElementById('progressText');
+  const emptyState   = document.getElementById('emptyState');
+
+  let files = []; // {id, file, name, size, type}
+  let idCounter = 0;
+  let dragSrcId = null;
+
+  // ── Toggle mutual exclusivity + badges ──
+  bwToggle.addEventListener('change', () => {
+    if (bwToggle.checked) enhToggle.checked = false;
+    bwBadge.classList.toggle('visible', bwToggle.checked);
+    enhBadge.classList.remove('visible');
+  });
+  enhToggle.addEventListener('change', () => {
+    if (enhToggle.checked) bwToggle.checked = false;
+    enhBadge.classList.toggle('visible', enhToggle.checked);
+    bwBadge.classList.remove('visible');
+  });
+
+  // ── File Input ──
+  fileInput.addEventListener('change', e => addFiles(Array.from(e.target.files)));
+  fileInput.addEventListener('click', e => e.stopPropagation());
+
+  dropZone.addEventListener('click', () => fileInput.click());
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    addFiles(Array.from(e.dataTransfer.files));
+  });
+
+  clearBtn.addEventListener('click', () => {
+    files = [];
+    renderQueue();
+  });
+
+  function addFiles(incoming) {
+    const allowed = ['application/pdf','image/jpeg','image/jpg','image/png'];
+    incoming.forEach(f => {
+      if (allowed.includes(f.type) || f.name.match(/\.(pdf|jpg|jpeg|png)$/i)) {
+        files.push({ id: ++idCounter, file: f, name: f.name, size: f.size, type: f.type });
+      }
+    });
+    fileInput.value = '';
+    renderQueue();
+  }
+
+  function renderQueue() {
+    fileList.innerHTML = '';
+    const hasFiles = files.length > 0;
+
+    queueSection.style.display = hasFiles ? 'block' : 'none';
+    emptyState.classList.toggle('visible', !hasFiles);
+    downloadBtn.disabled = !hasFiles;
+    countBadge.textContent = files.length;
+
+    files.forEach((f, idx) => {
+      const item = document.createElement('div');
+      item.className = 'file-item';
+      item.dataset.id = f.id;
+      item.draggable = true;
+
+      const isPDF = f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf');
+      const ext = f.name.split('.').pop().toUpperCase();
+      const sizeStr = formatSize(f.size);
+
+      let thumbHtml;
+      if (isPDF) {
+        thumbHtml = `<div class="file-thumb pdf-thumb" id="thumb-${f.id}">${ext}</div>`;
+      } else {
+        thumbHtml = `<img class="file-thumb" id="thumb-${f.id}" alt="${f.name}">`;
+      }
+
+      item.innerHTML = `
+        <span class="drag-handle">⠿</span>
+        <span class="file-num">${String(idx+1).padStart(2,'0')}</span>
+        ${thumbHtml}
+        <div class="file-info">
+          <div class="file-name">${escHtml(f.name)}</div>
+          <div class="file-meta">${ext} · ${sizeStr}</div>
+        </div>
+        <button class="btn-remove" data-id="${f.id}" title="Remove">✕</button>
+      `;
+
+      // Lazy-load image thumbnails
+      if (!isPDF) {
+        const img = item.querySelector(`#thumb-${f.id}`);
+        const url = URL.createObjectURL(f.file);
+        img.onload = () => URL.revokeObjectURL(url);
+        img.src = url;
+      } else {
+        // Render first page of PDF as thumbnail
+        renderPdfThumb(f.file, f.id);
+      }
+
+      // Drag-to-reorder events
+      item.addEventListener('dragstart', onDragStart);
+      item.addEventListener('dragover',  onDragOver);
+      item.addEventListener('drop',      onDrop);
+      item.addEventListener('dragend',   onDragEnd);
+
+      // Remove button
+      item.querySelector('.btn-remove').addEventListener('click', e => {
+        e.stopPropagation();
+        files = files.filter(x => x.id !== parseInt(e.currentTarget.dataset.id));
+        renderQueue();
+      });
+
+      fileList.appendChild(item);
+    });
+  }
+
+  async function renderPdfThumb(file, id) {
+    try {
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      const page = await pdf.getPage(1);
+      const vp = page.getViewport({ scale: 0.4 });
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      const el = document.getElementById(`thumb-${id}`);
+      if (el && el.tagName === 'DIV') {
+        const img = document.createElement('img');
+        img.className = 'file-thumb';
+        img.src = canvas.toDataURL('image/jpeg', 0.7);
+        el.replaceWith(img);
+      }
+    } catch(e) { /* keep text fallback */ }
+  }
+
+  // ── Drag reorder ──
+  function onDragStart(e) {
+    dragSrcId = parseInt(this.dataset.id);
+    this.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  }
+  function onDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    document.querySelectorAll('.file-item').forEach(el => el.classList.remove('drag-over'));
+    this.classList.add('drag-over');
+  }
+  function onDrop(e) {
+    e.preventDefault();
+    const targetId = parseInt(this.dataset.id);
+    if (dragSrcId === targetId) return;
+    const srcIdx = files.findIndex(f => f.id === dragSrcId);
+    const tgtIdx = files.findIndex(f => f.id === targetId);
+    const [moved] = files.splice(srcIdx, 1);
+    files.splice(tgtIdx, 0, moved);
+    renderQueue();
+  }
+  function onDragEnd() {
+    document.querySelectorAll('.file-item').forEach(el => {
+      el.classList.remove('dragging','drag-over');
+    });
+  }
+
+  // ── Download / Combine ──
+  downloadBtn.addEventListener('click', combineAndDownload);
+
+  async function combineAndDownload() {
+    if (!files.length) return;
+    downloadBtn.disabled = true;
+    progressWrap.classList.add('visible');
+    setProgress(0, 'Starting…');
+
+    // mode: 'color' | 'gray' | 'enhanced'
+    const mode = enhToggle.checked ? 'enhanced' : bwToggle.checked ? 'gray' : 'color';
+
+    try {
+      const { PDFDocument } = PDFLib;
+      const finalPdf = await PDFDocument.create();
+      const total = files.length;
+
+      for (let i = 0; i < total; i++) {
+        const f = files[i];
+        const isPDF = f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf');
+        setProgress(Math.round((i / total) * 90), `Processing ${i+1}/${total}: ${f.name}`);
+
+        if (isPDF) {
+          const buf = await f.file.arrayBuffer();
+          let srcPdf;
+          try { srcPdf = await PDFDocument.load(buf, { ignoreEncryption: true }); }
+          catch(e) { console.warn('Could not load PDF:', f.name, e); continue; }
+
+          if (mode === 'color') {
+            const indices = srcPdf.getPageIndices();
+            const copied = await finalPdf.copyPages(srcPdf, indices);
+            copied.forEach(p => finalPdf.addPage(p));
+          } else {
+            // Rasterize via PDF.js then apply filter
+            const pdfJs = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+            for (let p = 1; p <= pdfJs.numPages; p++) {
+              const page = await pdfJs.getPage(p);
+              const vp = page.getViewport({ scale: 2.0 });
+              const canvas = document.createElement('canvas');
+              canvas.width = vp.width; canvas.height = vp.height;
+              const ctx = canvas.getContext('2d');
+              await page.render({ canvasContext: ctx, viewport: vp }).promise;
+              if (mode === 'gray') applyGrayscaleScan(ctx, vp.width, vp.height);
+              else applyEnhancedBW(ctx, vp.width, vp.height);
+              const imgData = canvas.toDataURL('image/jpeg', 0.93);
+              const imgBytes = base64ToUint8Array(imgData.split(',')[1]);
+              const jpgImg = await finalPdf.embedJpg(imgBytes);
+              const newPage = finalPdf.addPage([vp.width, vp.height]);
+              newPage.drawImage(jpgImg, { x:0, y:0, width: vp.width, height: vp.height });
+            }
+          }
+        } else {
+          // Image file
+          const imgBuf = await f.file.arrayBuffer();
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const blob = new Blob([imgBuf], { type: f.type });
+          const imgEl = await loadImage(URL.createObjectURL(blob));
+
+          canvas.width = imgEl.naturalWidth;
+          canvas.height = imgEl.naturalHeight;
+          ctx.drawImage(imgEl, 0, 0);
+
+          if (mode === 'gray') applyGrayscaleScan(ctx, canvas.width, canvas.height);
+          else if (mode === 'enhanced') applyEnhancedBW(ctx, canvas.width, canvas.height);
+
+          const jpgData = canvas.toDataURL('image/jpeg', 0.95);
+          const jpgBytes = base64ToUint8Array(jpgData.split(',')[1]);
+          const jpgImg = await finalPdf.embedJpg(jpgBytes);
+          const pageW = canvas.width;
+          const pageH = canvas.height;
+          const newPage = finalPdf.addPage([pageW, pageH]);
+          newPage.drawImage(jpgImg, { x:0, y:0, width: pageW, height: pageH });
+        }
+      }
+
+      setProgress(95, 'Finalising PDF…');
+      const pdfBytes = await finalPdf.save();
+      setProgress(100, 'Done!');
+
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const url  = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `combined_${Date.now()}.pdf`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+      setTimeout(() => {
+        progressWrap.classList.remove('visible');
+        setProgress(0, '');
+        downloadBtn.disabled = false;
+      }, 2000);
+
+    } catch(err) {
+      console.error(err);
+      setProgress(0, '');
+      progressText.textContent = 'Error: ' + err.message;
+      downloadBtn.disabled = false;
+    }
+  }
+
+  // ── GRAYSCALE SCAN: soft luminance + mild contrast ──
+  function applyGrayscaleScan(ctx, w, h) {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      let g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      g = Math.min(255, Math.max(0, (g - 128) * 1.18 + 128 + 6));
+      d[i] = d[i+1] = d[i+2] = g;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  // ── ENHANCED B&W: CamScanner-style Magic Color ──
+  // Steps: grayscale → local contrast boost → adaptive threshold estimate
+  // → stretch to pure white background + deep black ink
+  function applyEnhancedBW(ctx, w, h) {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    const len = d.length;
+
+    // 1. Convert to grayscale
+    const gray = new Float32Array(w * h);
+    for (let i = 0, p = 0; i < len; i += 4, p++) {
+      gray[p] = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    }
+
+    // 2. Compute local mean via box blur (radius ~60px, clamped for speed)
+    //    We use a fast integral-image approach approximated by two passes
+    const radius = Math.min(60, Math.floor(Math.max(w, h) * 0.04));
+    const blurred = boxBlur(gray, w, h, radius);
+
+    // 3. Adaptive threshold + stretch
+    //    Each pixel: if gray < local_mean * 0.85  → ink (→ 0)
+    //                else → background (→ 255)
+    //    Then apply a gentle sigmoid to smooth the edges
+    const out = new Uint8ClampedArray(w * h);
+    for (let p = 0; p < w * h; p++) {
+      const g  = gray[p];
+      const bg = blurred[p];
+      // Normalise against local background
+      // ratio > 1 means lighter than surroundings (background)
+      // ratio < threshold means darker (ink)
+      const ratio = bg > 2 ? g / bg : 1.0;
+      // Threshold at 0.82 — lower = more aggressive ink detection
+      const t = 0.82;
+      if (ratio < t) {
+        // Ink pixel: map to [0..80] — deep black with some tonal range
+        out[p] = Math.round(Math.max(0, (ratio / t) * 60));
+      } else {
+        // Background: map to [230..255] — crisp white
+        const rel = (ratio - t) / (1.0 - t + 0.001);
+        out[p] = Math.round(230 + Math.min(1, rel) * 25);
+      }
+    }
+
+    // 4. Write back
+    for (let p = 0, i = 0; p < w * h; p++, i += 4) {
+      d[i] = d[i+1] = d[i+2] = out[p];
+      // alpha unchanged
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  // Fast separable box blur using prefix sums
+  function boxBlur(src, w, h, r) {
+    const dst = new Float32Array(w * h);
+    const tmp = new Float32Array(w * h);
+
+    // Horizontal pass
+    for (let y = 0; y < h; y++) {
+      let sum = 0, count = 0;
+      const row = y * w;
+      // Prime
+      for (let x = 0; x <= Math.min(r, w-1); x++) { sum += src[row + x]; count++; }
+      for (let x = 0; x < w; x++) {
+        tmp[row + x] = sum / count;
+        const add = x + r + 1; if (add < w)  { sum += src[row + add]; count++; }
+        const rem = x - r;     if (rem >= 0)  { sum -= src[row + rem]; count--; }
+      }
+    }
+    // Vertical pass
+    for (let x = 0; x < w; x++) {
+      let sum = 0, count = 0;
+      for (let y = 0; y <= Math.min(r, h-1); y++) { sum += tmp[y * w + x]; count++; }
+      for (let y = 0; y < h; y++) {
+        dst[y * w + x] = sum / count;
+        const add = y + r + 1; if (add < h)  { sum += tmp[add * w + x]; count++; }
+        const rem = y - r;     if (rem >= 0)  { sum -= tmp[rem * w + x]; count--; }
+      }
+    }
+    return dst;
+  }
+
+  function loadImage(src) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => res(img);
+      img.onerror = rej;
+      img.src = src;
+    });
+  }
+
+  function base64ToUint8Array(b64) {
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr;
+  }
+
+  function setProgress(pct, msg) {
+    progressFill.style.width = pct + '%';
+    progressText.textContent = msg;
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+    return (bytes/(1024*1024)).toFixed(1) + ' MB';
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Show empty state initially
+  emptyState.classList.add('visible');
+</script>
+</body>
+</html>
